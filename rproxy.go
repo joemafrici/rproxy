@@ -54,49 +54,57 @@ func (s *ServiceProxy) HandleSwitch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	decoder := json.NewDecoder(r.Body)
-	var switchRequest struct {
-		New string `json:"new"`
-	}
-	if err := decoder.Decode(&switchRequest); err != nil {
-		if err == io.EOF {
-			http.Error(w, "No body provided", http.StatusBadRequest)
-			return
-		}
-	}
-	new := &Service{Name: switchRequest.New}
+	//decoder := json.NewDecoder(r.Body)
+	//var switchRequest struct {
+	//	New string `json:"new"`
+	//}
+	//if err := decoder.Decode(&switchRequest); err != nil {
+	//	if err == io.EOF {
+	//		log.Printf("Error decoding request body: %v\n", err)
+	//		http.Error(w, "No body provided", http.StatusBadRequest)
+	//		return
+	//	}
+	//}
+
+	new := &Service{Name: r.FormValue("new")}
 
 	log.Printf("Determining if %s is healthy\n", new.Name)
 
 	isHealthy := false
 	for ii := 0; ii < 10; ii++ {
 		log.Println("checking health...")
-		if healthy, err := containerIsHealthy(s.DockerClient, new.Name); err != nil {
+		if healthy, err := containerIsHealthy(s.DockerClient, new.Name); err == nil {
+			log.Printf("container is healthy: %v\n", healthy)
 			if healthy {
 				isHealthy = true
 				break
 			}
+			log.Printf("containerIsHealthy error: %v\n", err)
 
 			if err.Error() == "unhealthy" {
+				log.Println("Container is not healthy")
 				http.Error(w, "Container is not healthy", http.StatusInternalServerError)
 				return
 			}
 		}
 
-		time.Sleep(time.Millisecond * 500)
+		time.Sleep(time.Second * 1)
 	}
 
 	if isHealthy == false {
+		log.Println("Container failed to become healthy")
 		http.Error(w, "Container failed to become healthy", http.StatusInternalServerError)
 		return
 	}
 
 	log.Println("Container is healthy")
 
+	log.Println("Switching to %s\n", new.Name)
 	s.mu.Lock()
 	old := s.Current
 	s.Current = new
 	s.mu.Unlock()
+	log.Println("Traffic is now routed to %s\n", new.Name)
 
 	// TODO: wait for requests to drain
 	fmt.Printf("Attempting to stop container %s\n", old.Name)
@@ -122,7 +130,14 @@ func containerIsHealthy(dockerClient *dockerclient.Client, containerName string)
 		log.Println("Failed to check container health")
 		return false, err
 	}
+	log.Println("Determinging if Health check is possible...")
+	log.Printf("Container is running: %v\n", containerInfo.State.Running)
+	return containerInfo.State.Running, nil
+	// TODO: need to look into healthcheck
+	// right now Health is nil for some reason
 	if containerInfo.State.Health != nil {
+		log.Println("Health check is possible")
+		log.Printf("Health is: %s\n", containerInfo.State.Health.Status)
 		if containerInfo.State.Health.Status == types.Healthy {
 			return true, nil
 		}
