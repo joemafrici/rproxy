@@ -1,7 +1,10 @@
 use log::info;
 use std::collections::HashMap;
+use std::fs;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+
+use toml::Table;
 
 use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;
@@ -20,13 +23,19 @@ use tokio::net::TcpListener;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     env_logger::init();
-    let state = Arc::new(Mutex::new(HashMap::new()));
+    let config_str = fs::read_to_string("/Users/deepwater/code/rproxy/config.toml")
+        .expect("Should have been able to read config file");
+    let config_toml = config_str
+        .parse::<Table>()
+        .expect("Should have been able to parse config file");
+    let state: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
     let addr = SocketAddr::from(([127, 0, 0, 1], 3002));
 
     {
         let mut routes = state.lock().unwrap();
-        routes.insert("hello", "3001");
-        routes.insert("webserver", "3000");
+        for (service, port) in &config_toml {
+            routes.insert(service.to_string(), port.to_string());
+        }
     };
 
     // We create a TcpListener and bind it to 127.0.0.1:3000
@@ -61,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 async fn proxy_handler(
-    state: Arc<Mutex<HashMap<&str, &str>>>,
+    state: Arc<Mutex<HashMap<String, String>>>,
     req: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     info!("Incoming request from {:?}", req.uri());
