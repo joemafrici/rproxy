@@ -21,11 +21,12 @@ use tokio::net::TcpListener;
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     env_logger::init();
     let state = Arc::new(Mutex::new(HashMap::new()));
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let addr = SocketAddr::from(([127, 0, 0, 1], 3002));
 
     {
         let mut routes = state.lock().unwrap();
         routes.insert("hello", "3001");
+        routes.insert("webserver", "3000");
     };
 
     // We create a TcpListener and bind it to 127.0.0.1:3000
@@ -71,12 +72,13 @@ async fn proxy_handler(
         .map(|pq| pq.as_str())
         .unwrap_or("");
 
-    let path = req.uri().path().strip_prefix("/").unwrap_or("");
+    let mut path = req.uri().path().strip_prefix("/").unwrap_or("");
     if path == "" {
-        info!("Unable to parse path");
-        let mut not_found = Response::new(empty());
-        *not_found.status_mut() = StatusCode::NOT_FOUND;
-        return Ok(not_found);
+        path = "webserver";
+        // info!("Unable to parse path");
+        // let mut not_found = Response::new(empty());
+        // *not_found.status_mut() = StatusCode::NOT_FOUND;
+        // return Ok(not_found);
     }
 
     info!("Request path is {}", path);
