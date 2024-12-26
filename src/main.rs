@@ -38,7 +38,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    // We create a TcpListener and bind it to 127.0.0.1:3000
     let listener = TcpListener::bind(addr).await?;
     info!("Listening on http://{}", addr);
 
@@ -81,19 +80,17 @@ async fn proxy_handler(
         .map(|pq| pq.as_str())
         .unwrap_or("");
 
-    let mut path = req.uri().path().strip_prefix("/").unwrap_or("");
-    if path == "" {
-        path = "webserver";
-        // info!("Unable to parse path");
-        // let mut not_found = Response::new(empty());
-        // *not_found.status_mut() = StatusCode::NOT_FOUND;
-        // return Ok(not_found);
-    }
+    let path = req.uri().path().strip_prefix("/").unwrap_or("");
+    let service_name = match path {
+        "static/styles.css" | "static/index.js" | "" => "webserver",
+        _ => path,
+    };
 
-    info!("Request path is {}", path);
+    info!("Request should be forwarded to {}", service_name);
+    info!("Retrieving port number for {}", service_name);
     let port_number = {
         let routes = state.lock().unwrap();
-        match routes.get(path) {
+        match routes.get(service_name) {
             Some(p) => p.to_string(),
             None => {
                 info!("Unable to determine port number");
@@ -104,7 +101,7 @@ async fn proxy_handler(
         }
     };
 
-    let uri = format!("http://localhost:{}", port_number);
+    let uri = format!("http://localhost:{}/{}", port_number, path);
     info!("forwarding request to {}", uri);
     let mut proxy_req = Request::builder().method(req.method()).uri(uri);
 
