@@ -8,10 +8,10 @@ use toml::Table;
 
 use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;
-use http_body_util::Empty;
-use hyper::body::Bytes;
+use http_body_util::{Empty, Full};
+use hyper::body::{Buf, Bytes};
 use hyper::server::conn::http1;
-use hyper::StatusCode;
+use hyper::{Method, StatusCode};
 
 use hyper::service::service_fn;
 use hyper::{Request, Response};
@@ -19,6 +19,14 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
+
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct SwitchRequestBody {
+    app: String,
+    port: u32,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -41,27 +49,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(addr).await?;
     info!("Listening on http://{}", addr);
 
-    // We start a loop to continuously accept incoming connections
+    // accept loop
     loop {
         let (stream, _) = listener.accept().await?;
         let state = state.clone();
 
-        // Use an adapter to access something implementing `tokio::io` traits as if they implement
+        // use an adapter to access something implementing `tokio::io` traits as if they implement
         // `hyper::rt` IO traits.
         let io = TokioIo::new(stream);
 
-        // Spawn a tokio task to serve multiple connections concurrently
+        // spawn a tokio task to serve multiple connections concurrently
         tokio::task::spawn(async move {
             let service = service_fn(move |req| {
                 let state = state.clone();
                 proxy_handler(state, req)
             });
-            // Finally, we bind the incoming connection to our `hello` service
-            if let Err(err) = http1::Builder::new()
-                // `service_fn` converts our function in a `Service`
-                .serve_connection(io, service)
-                .await
-            {
+            if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
                 eprintln!("Error serving connection: {:?}", err);
             }
         });
@@ -73,6 +76,124 @@ async fn proxy_handler(
     req: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     info!("Incoming request from {:?}", req.uri());
+    let result = match (req.method(), req.uri().path()) {
+        (&Method::POST, "/api/deploy/update") => handle_deploy_update(state, req).await,
+        (&Method::GET, "/api/port") => handle_get_port_number(state, req).await,
+        (&Method::POST, "/api/switch") => handle_switch(state, req).await,
+
+        _ => handle_forward_request(state, req).await,
+    };
+    return result;
+}
+
+async fn handle_switch(
+    state: Arc<Mutex<HashMap<String, String>>>,
+    req: Request<hyper::body::Incoming>,
+) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+    let body = req.into_body();
+    let bytes = match body.collect().await {
+        Ok(b) => b,
+        Err(e) => panic!("Problem reading request body stream: {}", e),
+    };
+
+    let bytes = bytes.aggregate();
+    let body: SwitchRequestBody = match serde_json::from_slice(bytes.chunk()) {
+        Ok(b) => b,
+        Err(e) => panic!("Problem deserializing request body: {}", e),
+    };
+
+    info!(
+        "Received request to switch {} to port {}",
+        body.app, body.port
+    );
+
+    {
+        let mut routes = state.lock().unwrap();
+        let old_port = routes.insert(body.app, body.port.to_string());
+    };
+
+    todo!()
+}
+
+// Returns a free port on the local system
+async fn handle_get_port_number(
+    _state: Arc<Mutex<HashMap<String, String>>>,
+    _req: Request<hyper::body::Incoming>,
+) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+    let port = match port_check::free_local_port() {
+        Some(p) => p,
+        None => {
+            info!("Error unable to get a free port");
+            let mut internal_server_error = Response::new(empty());
+            *internal_server_error.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            return Ok(internal_server_error);
+        }
+    };
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .body(BoxBody::new(full(port.to_string())))
+        .unwrap())
+}
+// async fn handle_get_port_number(
+//     state: Arc<Mutex<HashMap<String, String>>>,
+//     req: Request<hyper::body::Incoming>,
+// ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+//     info!("In handle_get_port_number");
+//     let query = match req.uri().query() {
+//         Some(query) => query,
+//         None => {
+//             info!("Error no query provided");
+//             let mut bad_request = Response::new(empty());
+//             *bad_request.status_mut() = StatusCode::BAD_REQUEST;
+//             return Ok(bad_request);
+//         }
+//     };
+//
+//     let (key, val) = match query.split_once("=") {
+//         Some((k, v)) => (k, v),
+//         None => {
+//             info!("Error unable to parse query string");
+//             let mut bad_request = Response::new(empty());
+//             *bad_request.status_mut() = StatusCode::BAD_REQUEST;
+//             return Ok(bad_request);
+//         }
+//     };
+//     if key != "app" && val != "axum-hello-world" {
+//         info!("Error app not found");
+//         let mut not_found = Response::new(empty());
+//         *not_found.status_mut() = StatusCode::NOT_FOUND;
+//         return Ok(not_found);
+//     }
+//
+//     let port = {
+//         let routes = state.lock().unwrap();
+//         match routes.get("hello") {
+//             Some(p) => p.to_string(),
+//             None => {
+//                 info!("Error app not found in table");
+//                 let mut not_found = Response::new(empty());
+//                 *not_found.status_mut() = StatusCode::NOT_FOUND;
+//                 return Ok(not_found);
+//             }
+//         }
+//     };
+//
+//     Ok(Response::builder()
+//         .status(StatusCode::OK)
+//         .body(BoxBody::new(full(port)))
+//         .unwrap())
+// }
+async fn handle_deploy_update(
+    state: Arc<Mutex<HashMap<String, String>>>,
+    req: Request<hyper::body::Incoming>,
+) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+    todo!();
+}
+async fn handle_forward_request(
+    state: Arc<Mutex<HashMap<String, String>>>,
+    req: Request<hyper::body::Incoming>,
+) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build(HttpConnector::new());
     let _path_and_query = req
         .uri()
@@ -127,8 +248,8 @@ fn empty() -> BoxBody<Bytes, hyper::Error> {
         .map_err(|never| match never {})
         .boxed()
 }
-// fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
-//     Full::new(chunk.into())
-//         .map_err(|never| match never {})
-//         .boxed()
-// }
+fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
+    Full::new(chunk.into())
+        .map_err(|never| match never {})
+        .boxed()
+}
