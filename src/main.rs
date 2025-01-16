@@ -135,55 +135,6 @@ async fn handle_get_port_number(
         .body(BoxBody::new(full(port.to_string())))
         .unwrap())
 }
-// async fn handle_get_port_number(
-//     state: Arc<Mutex<HashMap<String, String>>>,
-//     req: Request<hyper::body::Incoming>,
-// ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
-//     info!("In handle_get_port_number");
-//     let query = match req.uri().query() {
-//         Some(query) => query,
-//         None => {
-//             info!("Error no query provided");
-//             let mut bad_request = Response::new(empty());
-//             *bad_request.status_mut() = StatusCode::BAD_REQUEST;
-//             return Ok(bad_request);
-//         }
-//     };
-//
-//     let (key, val) = match query.split_once("=") {
-//         Some((k, v)) => (k, v),
-//         None => {
-//             info!("Error unable to parse query string");
-//             let mut bad_request = Response::new(empty());
-//             *bad_request.status_mut() = StatusCode::BAD_REQUEST;
-//             return Ok(bad_request);
-//         }
-//     };
-//     if key != "app" && val != "axum-hello-world" {
-//         info!("Error app not found");
-//         let mut not_found = Response::new(empty());
-//         *not_found.status_mut() = StatusCode::NOT_FOUND;
-//         return Ok(not_found);
-//     }
-//
-//     let port = {
-//         let routes = state.lock().unwrap();
-//         match routes.get("hello") {
-//             Some(p) => p.to_string(),
-//             None => {
-//                 info!("Error app not found in table");
-//                 let mut not_found = Response::new(empty());
-//                 *not_found.status_mut() = StatusCode::NOT_FOUND;
-//                 return Ok(not_found);
-//             }
-//         }
-//     };
-//
-//     Ok(Response::builder()
-//         .status(StatusCode::OK)
-//         .body(BoxBody::new(full(port)))
-//         .unwrap())
-// }
 async fn handle_deploy_update(
     state: Arc<Mutex<HashMap<String, String>>>,
     req: Request<hyper::body::Incoming>,
